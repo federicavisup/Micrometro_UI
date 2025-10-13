@@ -1,0 +1,32 @@
+# Ignora file CSV
+*.csv
+
+# Ignora file PKL
+*.pkl
+*.pkl.*
+*.pickle
+
+# Ignora cartelle temporanee
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignora file di ambiente
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Ignora file di IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Ignora file di sistema
+.DS_Store
+Thumbs.db
+
+# Ignora file JSON
+*.json
