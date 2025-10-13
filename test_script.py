@@ -81,7 +81,11 @@ class TimeSeriesDiameterTester:
         
         df = pd.read_csv(file_path)
         df.columns = df.columns.str.strip()
-        
+        if 'Dx' in df.columns:
+            df['Dx'] = df['Dx'] * 10
+        if 'Dy' in df.columns:
+            df['Dy'] = df['Dy'] * 10
+            
         # Converti colonna tempo
         df['time_seconds'] = df['Tempo'].apply(self.parse_time_column)
         df = df.dropna(subset=['time_seconds'])

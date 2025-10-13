@@ -1,7 +1,40 @@
+"""
+Script per il training del modello di stima del diametro equivalente dei tondini
+con analisi geometriche
+Autore: FC
+Data: 2025
+
+Questo script implementa un algoritmo di machine learning per stimare il diametro 
+equivalente di tondini di ferro analizzando finestre temporali di misure Dx e Dy.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor, ExtraTreesRegressor
+from sklearn.linear_model import LinearRegression, Ridge, ElasticNet
+from sklearn.svm import SVR
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.preprocessing import StandardScaler, RobustScaler, PolynomialFeatures
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.pipeline import Pipeline
+import joblib
+import warnings
+from scipy import signal
+from scipy.stats import pearsonr
+from scipy.fft import fft, fftfreq
+import os
+from datetime import datetime, timedelta
+from data_manager import TondinoDataManager
+
+
+warnings.filterwarnings('ignore')
 def train_models(self, X, y, test_size=0.2):
         """
         Addestra diversi modelli per stimare il diametro
-        VERSIONE MIGLIORATA per regressione continua
+        per regressione continua
         """
         print("Divisione train/test...")
         
@@ -194,38 +227,8 @@ def train_models(self, X, y, test_size=0.2):
         print(f"Valori unici (arrotondati a 0.1mm): {len(np.unique(np.round(y_pred_final, 1)))}")
         print(f"Standard deviation predizioni: {np.std(y_pred_final):.4f}")
         
-        return X_test, y_test, y_pred_final#!/usr/bin/env python3
-"""
-Script per il training del modello di stima del diametro equivalente dei tondini
-con analisi di serie temporali
-Autore: Assistente AI
-Data: 2025
+        return X_test, y_test, y_pred_final
 
-Questo script implementa un algoritmo di machine learning per stimare il diametro 
-equivalente di tondini di ferro analizzando finestre temporali di misure Dx e Dy.
-"""
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor, ExtraTreesRegressor
-from sklearn.linear_model import LinearRegression, Ridge, ElasticNet
-from sklearn.svm import SVR
-from sklearn.neural_network import MLPRegressor
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.preprocessing import StandardScaler, RobustScaler, PolynomialFeatures
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.pipeline import Pipeline
-import joblib
-import warnings
-from scipy import signal
-from scipy.stats import pearsonr
-from scipy.fft import fft, fftfreq
-import os
-from datetime import datetime, timedelta
-
-warnings.filterwarnings('ignore')
 
 class TimeSeriesDiameterEstimator:
     def __init__(self, window_duration=1.0, overlap=0.5):
@@ -279,6 +282,10 @@ class TimeSeriesDiameterEstimator:
         
         df = pd.read_csv(file_path)
         df.columns = df.columns.str.strip()
+        if 'Dx' in df.columns:
+            df['Dx'] = df['Dx'] * 10
+        if 'Dy' in df.columns:
+            df['Dy'] = df['Dy'] * 10
         
         # Converti colonna tempo in secondi relativi
         df['time_seconds'] = df['Tempo'].apply(self.parse_time_column)
@@ -288,8 +295,8 @@ class TimeSeriesDiameterEstimator:
         df['time_seconds'] = df['time_seconds'] - df['time_seconds'].min()
         
         # Filtra valori anomali
-        df_clean = df[(df['Dx'] > 0) & (df['Dx'] < 20) & 
-                      (df['Dy'] > 0) & (df['Dy'] < 20) & 
+        df_clean = df[(df['Dx'] > 0) & (df['Dx'] < 1000) & 
+                      (df['Dy'] > 0) & (df['Dy'] < 1000) & 
                       df['Dx'].notna() & df['Dy'].notna()].copy()
         
         # Ordina per tempo
@@ -1003,107 +1010,157 @@ class TimeSeriesDiameterEstimator:
         joblib.dump(model_data, model_path)
         print(f"Modello salvato in {model_path}")
     
-    def plot_results(self, y_true, y_pred, title="Predizioni vs Valori Reali"):
+    def plot_results(self, y_true, y_pred, title=None):
         """
         Visualizza i risultati del modello
         """
-        plt.figure(figsize=(15, 10))
-        
-        # Plot 1: Scatter plot predizioni vs valori reali
-        plt.subplot(2, 3, 1)
-        plt.scatter(y_true, y_pred, alpha=0.7, s=50)
-        
-        # Linea ideale
+        # plt.figure(figsize=(15, 10))
+        # 
+        # # Plot 1: Scatter plot predizioni vs valori reali
+        # plt.subplot(2, 3, 1)
+        # plt.scatter(y_true, y_pred, alpha=0.7, s=50)
+        # 
+        # # Linea ideale
+        # min_val = min(y_true.min(), y_pred.min())
+        # max_val = max(y_true.max(), y_pred.max())
+        # plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideale')
+        # 
+        # plt.xlabel('Diametro Reale (mm)')
+        # plt.ylabel('Diametro Predetto (mm)')
+        # plt.title(title)
+        # plt.legend()
+        # plt.grid(True, alpha=0.3)
+        # 
+        # # Metriche
+        # r2 = r2_score(y_true, y_pred)
+        # mae = mean_absolute_error(y_true, y_pred)
+        # rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+        # 
+        # plt.text(0.05, 0.95, f'R² = {r2:.4f}\nMAE = {mae:.4f} mm\nRMSE = {rmse:.4f} mm', 
+        #         transform=plt.gca().transAxes, verticalalignment='top', 
+        #         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        # 
+        # # Plot 2: Residui
+        # plt.subplot(2, 3, 2)
+        # residuals = y_pred - y_true
+        # plt.scatter(y_pred, residuals, alpha=0.7, s=50)
+        # plt.axhline(y=0, color='r', linestyle='--', lw=2)
+        # plt.xlabel('Diametro Predetto (mm)')
+        # plt.ylabel('Residui (mm)')
+        # plt.title('Grafico dei Residui')
+        # plt.grid(True, alpha=0.3)
+        # 
+        # # Plot 3: Distribuzione per diametro
+        # plt.subplot(2, 3, 3)
+        # unique_diameters = np.unique(y_true)
+        # for diameter in unique_diameters:
+        #     mask = y_true == diameter
+        #     plt.hist(y_pred[mask], alpha=0.7, label=f'D{diameter}mm', bins=20, density=True)
+        # plt.xlabel('Predizione (mm)')
+        # plt.ylabel('Densità')
+        # plt.title('Distribuzione Predizioni per Diametro')
+        # plt.legend()
+        # plt.grid(True, alpha=0.3)
+        # 
+        # # Plot 4: Box plot errori per diametro
+        # plt.subplot(2, 3, 4)
+        # error_data = []
+        # error_labels = []
+        # for diameter in unique_diameters:
+        #     mask = y_true == diameter
+        #     errors = np.abs(y_pred[mask] - y_true[mask])
+        #     error_data.append(errors)
+        #     error_labels.append(f'D{diameter}')
+        # 
+        # plt.boxplot(error_data, labels=error_labels)
+        # plt.ylabel('Errore Assoluto (mm)')
+        # plt.title('Distribuzione Errori per Diametro')
+        # plt.grid(True, alpha=0.3)
+        # 
+        # # Plot 5: Feature importance (se disponibile)
+        # plt.subplot(2, 3, 5)
+        # if self.feature_importance:
+        #     top_features = sorted(self.feature_importance.items(), key=lambda x: x[1], reverse=True)[:10]
+        #     features, importances = zip(*top_features)
+        #     
+        #     plt.barh(range(len(features)), importances)
+        #     plt.yticks(range(len(features)), features)
+        #     plt.xlabel('Importanza')
+        #     plt.title('Top 10 Feature Importanti')
+        #     plt.grid(True, alpha=0.3)
+        # 
+        # # Plot 6: Confusion matrix per classificazione diametri
+        # plt.subplot(2, 3, 6)
+        # from sklearn.metrics import confusion_matrix
+        # import seaborn as sns
+        # 
+        # # Arrotonda le predizioni al diametro più vicino per la matrice di confusione
+        # y_true_rounded = np.round(y_true).astype(int)
+        # y_pred_rounded = np.round(y_pred).astype(int)
+        # 
+        # cm = confusion_matrix(y_true_rounded, y_pred_rounded)
+        # sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+        #             xticklabels=np.unique(y_true_rounded),
+        #             yticklabels=np.unique(y_true_rounded))
+        # plt.xlabel('Predizione (mm)')
+        # plt.ylabel('Reale (mm)')
+        # plt.title('Matrice di Confusione')
+        # 
+        # plt.tight_layout()
+        # plt.show()
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
         min_val = min(y_true.min(), y_pred.min())
         max_val = max(y_true.max(), y_pred.max())
-        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideale')
-        
-        plt.xlabel('Diametro Reale (mm)')
-        plt.ylabel('Diametro Predetto (mm)')
-        plt.title(title)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Metriche
+        axes[0].scatter(y_true, y_pred, alpha=0.7, s=60)
+        axes[0].plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
+        axes[0].set_xlabel('Diametro Reale (mm)')
+        axes[0].set_ylabel('Diametro Predetto (mm)')
+        if title is None:
+            title = "Predizioni vs Valori Reali"
+        model_label = self.best_model_name if self.best_model_name else "Modello"
+        axes[0].set_title(f"{model_label} - {title}")
+        axes[0].grid(True, alpha=0.3)
+
         r2 = r2_score(y_true, y_pred)
         mae = mean_absolute_error(y_true, y_pred)
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        
-        plt.text(0.05, 0.95, f'R² = {r2:.4f}\nMAE = {mae:.4f} mm\nRMSE = {rmse:.4f} mm', 
-                transform=plt.gca().transAxes, verticalalignment='top', 
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
-        # Plot 2: Residui
-        plt.subplot(2, 3, 2)
-        residuals = y_pred - y_true
-        plt.scatter(y_pred, residuals, alpha=0.7, s=50)
-        plt.axhline(y=0, color='r', linestyle='--', lw=2)
-        plt.xlabel('Diametro Predetto (mm)')
-        plt.ylabel('Residui (mm)')
-        plt.title('Grafico dei Residui')
-        plt.grid(True, alpha=0.3)
-        
-        # Plot 3: Distribuzione per diametro
-        plt.subplot(2, 3, 3)
-        unique_diameters = np.unique(y_true)
-        for diameter in unique_diameters:
-            mask = y_true == diameter
-            plt.hist(y_pred[mask], alpha=0.7, label=f'D{diameter}mm', bins=20, density=True)
-        plt.xlabel('Predizione (mm)')
-        plt.ylabel('Densità')
-        plt.title('Distribuzione Predizioni per Diametro')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Plot 4: Box plot errori per diametro
-        plt.subplot(2, 3, 4)
-        error_data = []
-        error_labels = []
-        for diameter in unique_diameters:
-            mask = y_true == diameter
-            errors = np.abs(y_pred[mask] - y_true[mask])
-            error_data.append(errors)
-            error_labels.append(f'D{diameter}')
-        
-        plt.boxplot(error_data, labels=error_labels)
-        plt.ylabel('Errore Assoluto (mm)')
-        plt.title('Distribuzione Errori per Diametro')
-        plt.grid(True, alpha=0.3)
-        
-        # Plot 5: Feature importance (se disponibile)
-        plt.subplot(2, 3, 5)
+        axes[0].text(0.05, 0.95, f'R² = {r2:.4f}\nMAE = {mae:.4f} mm\nRMSE = {rmse:.4f} mm',
+                     transform=axes[0].transAxes, va='top',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+        errors = y_pred - y_true
+        sample_idx = np.arange(len(errors))
+        axes[1].axhline(0, color='r', linestyle='--', lw=2)
+        axes[1].scatter(sample_idx, errors, alpha=0.7, s=50)
+        axes[1].set_xlabel('Indice finestra')
+        axes[1].set_ylabel('Differenza (mm)')
+        axes[1].set_title('Differenza Predizione - Valore Reale')
+        axes[1].grid(True, alpha=0.3)
+
         if self.feature_importance:
             top_features = sorted(self.feature_importance.items(), key=lambda x: x[1], reverse=True)[:10]
             features, importances = zip(*top_features)
-            
-            plt.barh(range(len(features)), importances)
-            plt.yticks(range(len(features)), features)
-            plt.xlabel('Importanza')
-            plt.title('Top 10 Feature Importanti')
-            plt.grid(True, alpha=0.3)
-        
-        # Plot 6: Confusion matrix per classificazione diametri
-        plt.subplot(2, 3, 6)
-        from sklearn.metrics import confusion_matrix
-        import seaborn as sns
-        
-        # Arrotonda le predizioni al diametro più vicino per la matrice di confusione
-        y_true_rounded = np.round(y_true).astype(int)
-        y_pred_rounded = np.round(y_pred).astype(int)
-        
-        cm = confusion_matrix(y_true_rounded, y_pred_rounded)
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                    xticklabels=np.unique(y_true_rounded),
-                    yticklabels=np.unique(y_true_rounded))
-        plt.xlabel('Predizione (mm)')
-        plt.ylabel('Reale (mm)')
-        plt.title('Matrice di Confusione')
-        
-        plt.tight_layout()
+            importances = np.array(importances)
+            normalized_importances = importances / importances.sum() if importances.sum() else importances
+            axes[2].barh(range(len(features)), normalized_importances[::-1], color='seagreen')
+            axes[2].set_yticks(range(len(features)))
+            axes[2].set_yticklabels(features[::-1])
+            axes[2].invert_yaxis()
+            axes[2].set_xlabel('Importanza relativa')
+            axes[2].set_title('Feature più rilevanti per il modello')
+            axes[2].grid(True, axis='x', alpha=0.3)
+            axes[2].text(0.95, 0.05, 'Valori più alti ⇒ maggiore contributo alle decisioni',
+                         transform=axes[2].transAxes, ha='right', va='bottom', fontsize=9,
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            axes[2].axis('off')
+            axes[2].text(0.5, 0.5, 'Importanza feature non disponibile per il modello selezionato',
+                         transform=axes[2].transAxes, ha='center', va='center')
+
+        fig.tight_layout()
         plt.show()
-
-
-from data_manager import TondinoDataManager
 
 def main():
     """
