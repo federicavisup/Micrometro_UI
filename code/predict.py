@@ -21,6 +21,8 @@ import joblib
 import json
 from pathlib import Path
 import common as utils
+import re
+import math
 
 
 class CableDiameterPredictor:
@@ -38,47 +40,19 @@ class CableDiameterPredictor:
             scaler_path: path al file dello scaler (.joblib)
             metadata_path: path al file dei metadata (.json)
         """
-        print("=" * 60)
-        print("CARICAMENTO MODELLO")
-        print("=" * 60)
-        
-        # Carica il modello
+        # Carica il modello silenziosamente
         self.model = joblib.load(model_path)
-        print(f"✓ Modello caricato: {model_path}")
-        
-        # Carica lo scaler
         self.scaler = joblib.load(scaler_path)
-        print(f"✓ Scaler caricato: {scaler_path}")
-        
-        # Carica i metadata
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
-        print(f"✓ Metadata caricati: {metadata_path}")
         
         # Estrai parametri dai metadata
         self.model_name = self.metadata['model_name']
         self.window_size = self.metadata.get('window_size', 1.0)
         self.window_overlap = self.metadata.get('window_overlap', 0.5)
         self.selected_features = self.metadata.get('selected_features', None)
-        
-        print(f"\nConfigurazione modello:")
-        print(f"  Nome: {self.model_name}")
-        print(f"  Tipo: {self.metadata['model_type']}")
-        print(f"  Window size: {self.window_size}s")
-        print(f"  Window overlap: {self.window_overlap*100:.0f}%")
-        print(f"  Features selezionate: {len(self.selected_features) if self.selected_features else 'tutte'}")
-        
-        print(f"\nMetriche sul test set durante il training:")
-        for metric, value in self.metadata['test_metrics'].items():
-            if value != 'inf':
-                if metric == 'MAPE':
-                    print(f"  {metric}: {value:.2f}%")
-                else:
-                    print(f"  {metric}: {value:.4f}")
-        
-        print("=" * 60 + "\n")
     
-    def predict_from_file(self, filepath, data_folder='data', verbose=True):
+    def predict_from_file(self, filepath, data_folder='data', verbose=False):
         """
         Predice il diametro equivalente da un file CSV.
         
@@ -90,11 +64,6 @@ class CableDiameterPredictor:
         Returns:
             dict con risultati della predizione
         """
-        if verbose:
-            print("=" * 60)
-            print("PREDIZIONE DIAMETRO EQUIVALENTE")
-            print("=" * 60)
-        
         # Costruisci il path completo se necessario
         if not os.path.isabs(filepath):
             filepath = Path(data_folder) / filepath
@@ -104,25 +73,11 @@ class CableDiameterPredictor:
         if not filepath.exists():
             raise FileNotFoundError(f"File non trovato: {filepath}")
         
-        if verbose:
-            print(f"File: {filepath.name}")
-        
         # 1. Carica e valida i dati
-        if verbose:
-            print("\n1. Caricamento e validazione dati...")
-        
         df = pd.read_csv(filepath)
         df_clean, removed = utils.validate_and_clean_data(df, filepath.name)
         
-        if verbose:
-            print(f"   ✓ Misure valide: {len(df_clean)}")
-            if removed > 0:
-                print(f"   ⚠ Misure rimosse: {removed}")
-        
         # 2. Crea sliding windows ed estrai features
-        if verbose:
-            print(f"\n2. Estrazione features (finestre da {self.window_size}s)...")
-        
         dx_series = df_clean['Dx'].values
         dy_series = df_clean['Dy'].values
         
@@ -135,9 +90,6 @@ class CableDiameterPredictor:
         
         if len(windows_features) == 0:
             raise ValueError("Nessuna finestra valida estratta dal file!")
-        
-        if verbose:
-            print(f"   ✓ Finestre create: {len(windows_features)}")
         
         # 3. Converti in DataFrame
         features_df = pd.DataFrame(windows_features)
@@ -154,41 +106,20 @@ class CableDiameterPredictor:
             # Usa tutte le features
             X = features_df
         
-        if verbose:
-            print(f"   ✓ Features utilizzate: {X.shape[1]}")
-        
         # 5. Scala le features
         X_scaled = self.scaler.transform(X)
         
         # 6. Predizione
-        if verbose:
-            print("\n3. Predizione in corso...")
-        
         predictions = self.model.predict(X_scaled)
         
-        # 7. Calcola statistiche
+        # 7. Calcola statistiche e ritorna senza prints
         mean_prediction = np.mean(predictions)
         std_prediction = np.std(predictions)
         min_prediction = np.min(predictions)
         max_prediction = np.max(predictions)
         median_prediction = np.median(predictions)
         
-        # 8. Risultati
-        if verbose:
-            print("\n" + "=" * 60)
-            print("RISULTATI")
-            print("=" * 60)
-            print(f"\n📊 Statistiche predizioni ({len(predictions)} finestre):")
-            print(f"   Media:    {mean_prediction:.3f} mm")
-            print(f"   Mediana:  {median_prediction:.3f} mm")
-            print(f"   Std Dev:  {std_prediction:.3f} mm")
-            print(f"   Min:      {min_prediction:.3f} mm")
-            print(f"   Max:      {max_prediction:.3f} mm")
-            print(f"\n🎯 DIAMETRO EQUIVALENTE STIMATO: {mean_prediction/10:.3f} mm")
-            print("=" * 60 + "\n")
-        
-        # Prepara il dizionario dei risultati
-        result = {
+        return {
             'filename': filepath.name,
             'estimated_diameter': mean_prediction,
             'median_diameter': median_prediction,
@@ -199,8 +130,6 @@ class CableDiameterPredictor:
             'all_predictions': predictions.tolist(),
             'model_used': self.model_name
         }
-        
-        return result
 
 
 def find_latest_model(model_dir='models'):
@@ -236,7 +165,7 @@ def find_latest_model(model_dir='models'):
 
 def predict_diameter(filename, data_folder='data', model_dir='models', 
                      model_path=None, scaler_path=None, metadata_path=None,
-                     verbose=True):
+                     verbose=False):
     """
     Funzione di utilità per predire il diametro equivalente da un file.
     
@@ -283,8 +212,104 @@ def main():
     parser.add_argument('--metadata', help='Path specifico al file dei metadata')
     parser.add_argument('--quiet', '-q', action='store_true',
                        help='Modalità silenziosa (solo risultato finale)')
+    parser.add_argument('--all', action='store_true',
+                       help='Esegui predizione su tutti i file .csv nella cartella "test" dentro data_folder')
+    parser.add_argument('--test_folder', default='test',
+                       help='Nome della sottocartella con i file di test (default: test)')
     
     args = parser.parse_args()
+    
+    # Batch mode: processa tutti i .csv nella cartella data_folder/test_folder
+    #if args.all:
+    if True:
+        test_dir = Path(args.data_folder) / args.test_folder
+        if not test_dir.exists():
+            print(f"❌ ERRORE: Cartella test non trovata: {test_dir}")
+            return 1
+        
+        csv_files = sorted(test_dir.glob("*.csv"))
+        if not csv_files:
+            print(f"❌ ERRORE: Nessun file .csv trovato in {test_dir}")
+            return 1
+        
+        true_vals = []
+        pred_vals = []
+        abs_errors = []
+        sq_errors = []
+        pct_errors = []
+        processed = 0
+        failed = 0
+        
+        # Rimuovi header batch
+        for fp in csv_files:
+            try:
+                fname = fp.name
+                # Estrai valore vero dal nome: cerca 'D<number>'
+                m = re.search(r"D(\d+)", fname, re.IGNORECASE)
+                if not m:
+                    print(f"⚠ Skipping {fname}: pattern D<number> non trovato nel nome.")
+                    failed += 1
+                    continue
+                true_value = int(m.group(1))
+                
+                # Esegui predizione (usa data_folder come path base)
+                # passiamo il filename relativo alla funzione predict_diameter
+                result = predict_diameter(
+                    filename=str(fp),
+                    data_folder="",
+                    model_dir=args.model_dir,
+                    model_path=args.model,
+                    scaler_path=args.scaler,
+                    metadata_path=args.metadata,
+                    verbose=False  # sempre False per ridurre output
+                )
+                
+                estimated_raw = result['estimated_diameter']  # valore come usato internamente
+                # Usa la predizione così com'è (nessuna divisione per 10)
+                predicted_mm = estimated_raw
+                true_mm = float(true_value)
+                
+                abs_err = abs(predicted_mm - true_mm)
+                sq_err = (predicted_mm - true_mm) ** 2
+                pct_err = abs_err / true_mm * 100.0 if true_mm != 0 else float('inf')
+                
+                true_vals.append(true_mm)
+                pred_vals.append(predicted_mm)
+                abs_errors.append(abs_err)
+                sq_errors.append(sq_err)
+                if math.isfinite(pct_err):
+                    pct_errors.append(pct_err)
+                
+                processed += 1
+                
+                # Stampa solo la riga essenziale per ogni file
+                print(f"{fname}: true={true_mm:.3f} mm, pred={predicted_mm:.3f} mm, abs_err={abs_err:.3f} mm, pct_err={pct_err:.2f}%")
+            
+            except Exception as e:
+                print(f"❌ Errore su {fp.name}: {e}")
+                failed += 1
+                continue
+        
+        # Metriche aggregate (mantieni questo output)
+        if processed > 0:
+            mae = float(np.mean(abs_errors))
+            rmse = float(math.sqrt(np.mean(sq_errors)))
+            mape = float(np.mean(pct_errors)) if pct_errors else float('inf')
+            
+            print("\n" + "=" * 60)
+            print("RIASSUNTO METRICHE")
+            print("=" * 60)
+            print(f"  Files processati: {processed}")
+            print(f"  Files falliti:    {failed}")
+            print(f"  MAE:              {mae:.3f} mm")
+            print(f"  RMSE:             {rmse:.3f} mm")
+            if math.isfinite(mape):
+                print(f"  MAPE:             {mape:.2f}%")
+            else:
+                print(f"  MAPE:             inf (divisione per zero)")
+            print("=" * 60)
+        
+        return 0
     
     # Se il file non è specificato come argomento, chiedi all'utente
     if args.file is None:
