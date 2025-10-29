@@ -1,6 +1,6 @@
 """
 Script di training per il sistema ML di stima diametro equivalente cavi.
-Usa le funzioni condivise da cable_ml_utils.py
+Usa le funzioni condivise da common.py
 
 Uso:
     python train.py
@@ -25,7 +25,7 @@ from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.neural_network import MLPRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # Per salvare il modello
 import joblib
