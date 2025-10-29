@@ -71,7 +71,7 @@ def main():
                 print(f"❌ Errore su {fp.name}: {e}")
                 continue
         # salva results.csv in test_dir o in --output se fornito
-        out_path = Path(args.output) if args.output else (test_dir / "results.csv")
+        out_path = Path(args.output) if args.output else ( "results.csv")
         pd.DataFrame(rows).to_csv(out_path, index=False)
         print(f"Risultati salvati in: {out_path}")
         return 0
