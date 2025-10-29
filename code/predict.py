@@ -220,8 +220,8 @@ def main():
     args = parser.parse_args()
     
     # Batch mode: processa tutti i .csv nella cartella data_folder/test_folder
-    #if args.all:
-    if True:
+    if args.all:
+    #if True:
         test_dir = Path(args.data_folder) / args.test_folder
         if not test_dir.exists():
             print(f"❌ ERRORE: Cartella test non trovata: {test_dir}")
@@ -250,7 +250,7 @@ def main():
                     print(f"⚠ Skipping {fname}: pattern D<number> non trovato nel nome.")
                     failed += 1
                     continue
-                true_value = int(m.group(1))
+                true_value = float(m.group(1))/10.0
                 
                 # Esegui predizione (usa data_folder come path base)
                 # passiamo il filename relativo alla funzione predict_diameter
@@ -265,8 +265,7 @@ def main():
                 )
                 
                 estimated_raw = result['estimated_diameter']  # valore come usato internamente
-                # Usa la predizione così com'è (nessuna divisione per 10)
-                predicted_mm = estimated_raw
+                predicted_mm = estimated_raw/10.0
                 true_mm = float(true_value)
                 
                 abs_err = abs(predicted_mm - true_mm)
@@ -307,6 +306,11 @@ def main():
                 print(f"  MAPE:             {mape:.2f}%")
             else:
                 print(f"  MAPE:             inf (divisione per zero)")
+            # Brevi definizioni delle metriche
+            print("\n  Note sulle metriche:")
+            print("    MAE  = (errore assoluto medio in mm).")
+            print("    RMSE = (radice dell'errore quadratico medio in mm; ).")
+            print("    MAPE = (errore percentuale medio).")
             print("=" * 60)
         
         return 0
