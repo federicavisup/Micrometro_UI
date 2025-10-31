@@ -758,10 +758,10 @@ def main():
     """
     # Parametri configurabili
     DATA_FOLDER = 'data'
-    TRAIN_RATIO = 0.7  # 70% training, 30% test
+    TRAIN_RATIO = 0.8  # 70% training, 30% test
     RANDOM_STATE = 42
     FEATURE_SELECTION = True  # Abilita l'analisi e selezione features
-    WINDOW_SIZE = 1.0  # Durata finestra in secondi
+    WINDOW_SIZE = 1.5  # durata finestra in secondi
     WINDOW_OVERLAP = 0.5  # Overlap tra finestre (50%)
     
     # Crea ed esegui la pipeline

@@ -19,6 +19,7 @@ def compute_weight_per_m(d_mm, rho=7850.0):
     return rho * area
 
 def process_single(file_path, args):
+    reslts = []
     # chiama predict_diameter con il path completo
     result = predict_diameter(
         filename=str(file_path),
@@ -29,15 +30,17 @@ def process_single(file_path, args):
         metadata_path=args.metadata,
         verbose=False
     )
-    estimated_raw = result['estimated_diameter']
+    estimated_raw = result['all_predictions']
     # conversione coerente con il predict.py presente: /10
-    predicted_mm = estimated_raw / 10.0
-    weight = compute_weight_per_m(predicted_mm)
-    return {
-        'filename': Path(file_path).name,
-        'estimated_diameter_mm': predicted_mm,
-        'weight_kg_per_m': weight
-    }
+    for pd_mm in estimated_raw:
+        predicted_mm = pd_mm / 10.0
+        weight = compute_weight_per_m(predicted_mm)
+        reslts.append({
+            'filename': Path(file_path).name,
+            'estimated_diameter_mm': pd_mm,
+            'weight_kg_per_m': weight
+        })
+    return reslts
 
 def main():
     parser = argparse.ArgumentParser(description='Calcola peso/m a partire da predizioni diametro')
@@ -64,9 +67,10 @@ def main():
             return 1
         for fp in csv_files:
             try:
-                row = process_single(fp, args)
-                rows.append(row)
-                print(f"{row['filename']}: true=.. mm, pred={row['estimated_diameter_mm']:.3f} mm, weight={row['weight_kg_per_m']:.6f} kg/m")
+                rowp = process_single(fp, args)
+                for row in rowp:
+                    rows.append(row)
+                    print(f"{row['filename']}: true=.. mm, pred={row['estimated_diameter_mm']:.3f} mm, weight={row['weight_kg_per_m']:.6f} kg/m")
             except Exception as e:
                 print(f"❌ Errore su {fp.name}: {e}")
                 continue
