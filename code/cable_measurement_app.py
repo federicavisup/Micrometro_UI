@@ -591,7 +591,7 @@ class CableMeasurementApp(QMainWindow):
     def acquire_data(self):
         """Simula l'acquisizione di dati"""
         # Simula misure di un cavo da circa 10mm con variazioni realistiche
-        base_diameter = 10.0  # mm
+        base_diameter = 11.0  # mm
         noise = 0.05  # variazione del 5%
         
         dx = base_diameter + (random.random() - 0.5) * base_diameter * noise
@@ -790,34 +790,124 @@ class CableMeasurementApp(QMainWindow):
         """Calcola e visualizza le metriche di confronto"""
         try:
             expected = float(self.expected_input.text())
-            # Non procedere se valore atteso non valido o se non abbiamo ancora un peso calcolato
-            if expected <= 0 or (self.weight_per_meter is None) or (self.weight_per_meter <= 0):
-                 return
-
-            # Calcolo percentuale di scostamento
-            deviation = ((self.weight_per_meter - expected) / expected) * 100
+            if expected <= 0 or self.weight_per_meter <= 0:
+                return
             
-            # Punti di riferimento per il semaforo
-            green_threshold = 10  # sotto il 10% di scostamento
-            yellow_threshold = 25  # tra 10% e 25% di scostamento
+            # Rimuovi widget precedenti
+            while self.metrics_layout.count():
+                child = self.metrics_layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
             
-            # Colori semaforo
-            if abs(deviation) < green_threshold:
-                color = "#15803d"  # verde
-                status = "OK"
-            elif abs(deviation) < yellow_threshold:
-                color = "#eab308"  # giallo
-                status = "Attenzione"
-            else:
-                color = "#dc2626"  # rosso
-                status = "Errore"
+            # Calcola metriche
+            error = self.weight_per_meter - expected
+            percentage_error = (error / expected) * 100
+            absolute_error = abs(error)
+            relative_error = abs(percentage_error)
+            bias = error
+            accuracy = 100 - relative_error
+            rmse = absolute_error
+            mae = absolute_error
             
-            # Mostra risultati
+            is_acceptable = relative_error < 5
+            
+            # Contenitore con sfondo
+            container = QWidget()
+            container.setStyleSheet("""
+                background-color: #f8fafc;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 15px;
+            """)
+            container_layout = QVBoxLayout()
+            
+            # Header
+            header_layout = QHBoxLayout()
+            header_title = QLabel("Metriche di Confronto")
+            header_title.setStyleSheet("font-weight: bold; color: #0f172a; font-size: 13px;")
+            header_layout.addWidget(header_title)
+            
+            status_badge = QLabel("✓ Accettabile" if is_acceptable else "⚠ Fuori tolleranza")
+            status_color = "#22c55e" if is_acceptable else "#dc2626"
+            status_badge.setStyleSheet(f"""
+                background-color: {status_color};
+                color: white;
+                padding: 4px 10px;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 11px;
+            """)
+            header_layout.addWidget(status_badge)
+            header_layout.addStretch()
+            
+            container_layout.addLayout(header_layout)
+            
+            # Griglia metriche principali
+            metrics_grid = QGridLayout()
+            metrics_grid.setSpacing(10)
+            
+            bias_card = MetricsCard("Bias", "kg/m", 6)
+            bias_card.set_value(bias)
+            metrics_grid.addWidget(bias_card, 0, 0)
+            
+            error_pct_card = MetricsCard("Errore %", "%", 3)
+            error_pct_card.set_value(percentage_error)
+            metrics_grid.addWidget(error_pct_card, 0, 1)
+            
+            abs_error_card = MetricsCard("Errore Assoluto", "kg/m", 6)
+            abs_error_card.set_value(absolute_error)
+            metrics_grid.addWidget(abs_error_card, 0, 2)
+            
+            accuracy_card = MetricsCard("Accuratezza", "%", 2, highlight=True)
+            accuracy_card.set_value(accuracy)
+            metrics_grid.addWidget(accuracy_card, 0, 3)
+            
+            container_layout.addLayout(metrics_grid)
+            
+            # Griglia metriche secondarie
+            secondary_grid = QGridLayout()
+            secondary_grid.setSpacing(10)
+            
+            rmse_card = MetricsCard("RMSE", "kg/m", 6)
+            rmse_card.set_value(rmse)
+            secondary_grid.addWidget(rmse_card, 0, 0)
+            
+            mae_card = MetricsCard("MAE", "kg/m", 6)
+            mae_card.set_value(mae)
+            secondary_grid.addWidget(mae_card, 0, 1)
+            
+            container_layout.addLayout(secondary_grid)
+            
+            # Valori confronto
+            values_layout = QGridLayout()
+            values_layout.setSpacing(15)
+            
+            measured_container = QVBoxLayout()
+            measured_label = QLabel("Valore Misurato:")
+            measured_label.setStyleSheet("color: #64748b; font-size: 11px;")
+            measured_value = QLabel(f"{self.weight_per_meter:.6f} kg/m")
+            measured_value.setStyleSheet("color: #9333ea; font-weight: bold; font-size: 13px;")
+            measured_container.addWidget(measured_label)
+            measured_container.addWidget(measured_value)
+            values_layout.addLayout(measured_container, 0, 0)
+            
+            expected_container = QVBoxLayout()
+            expected_label = QLabel("Valore Atteso:")
+            expected_label.setStyleSheet("color: #64748b; font-size: 11px;")
+            expected_container.addWidget(expected_label)
+            expected_value = QLabel(f"{expected:.6f} kg/m")
+            # testo in blu per evidenziare il valore atteso
+            expected_value.setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 13px;")
+            expected_container.addWidget(expected_value)
+            values_layout.addLayout(expected_container, 0, 1)
+            
+            container_layout.addLayout(values_layout)
+            
+            container.setLayout(container_layout)
+            self.metrics_layout.addWidget(container)
             self.metrics_container.show()
-            self.metrics_layout.itemAt(0).widget().setStyleSheet(f"color: {color}; font-weight: bold;")
-            self.metrics_layout.itemAt(0).widget().setText(f"Scostamento: {deviation:.2f}%")
-            self.metrics_layout.itemAt(1).widget().setText(f"Status: {status}")
-        except Exception:
+            
+        except ValueError:
             pass
 
 
