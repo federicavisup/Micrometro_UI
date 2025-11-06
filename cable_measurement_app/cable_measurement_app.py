@@ -15,7 +15,7 @@ from typing import List, Tuple
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSlider, QLineEdit, QGroupBox, QGridLayout,
-    QSizePolicy
+    QSizePolicy, QScrollArea
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPalette, QColor
@@ -136,7 +136,6 @@ class CableMeasurementApp(QMainWindow):
         # Stato dell'applicazione
         self.is_acquiring = False
         self.measurements: deque = deque(maxlen=1000)  # Ultime 1000 misure
-        self.time_window = 5  # secondi
         self.current_dx = 0.0
         self.current_dy = 0.0
         self.equivalent_diameter = 0.0
@@ -154,11 +153,7 @@ class CableMeasurementApp(QMainWindow):
         self.setWindowTitle("Sistema di Studio Fattibilità - Misura Diametro Cavi Metallici")
         self.setGeometry(100, 100, 1400, 900)
         
-        # Widget centrale
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # Layout principale
+        # Layout principale inserito in un content widget scrollabile
         main_layout = QVBoxLayout()
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
@@ -197,17 +192,29 @@ class CableMeasurementApp(QMainWindow):
         weight_group = self.create_weight_section()
         main_layout.addWidget(weight_group)
         
-        central_widget.setLayout(main_layout)
-        
-        # Stile generale
+        # content_widget contiene il layout; viene inserito nella QScrollArea
+        content_widget = QWidget()
+        content_widget.setLayout(main_layout)
+        content_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content_widget)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # Imposta la scroll area come central widget
+        self.setCentralWidget(scroll)
+         
+         # Stile generale
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f8fafc;
-            }
-            QWidget {
-                background-color: #f8fafc;
-            }
-        """)
+             QMainWindow {
+                 background-color: #f8fafc;
+             }
+             QWidget {
+                 background-color: #f8fafc;
+             }
+         """)
     
     def create_controls_section(self) -> QGroupBox:
         """Crea la sezione dei controlli"""
@@ -232,7 +239,7 @@ class CableMeasurementApp(QMainWindow):
         layout = QVBoxLayout()
         
         # Descrizione
-        desc = QLabel("Avvia/Arresta l'acquisizione delle misure e regola la finestra temporale")
+        desc = QLabel("Avvia/Arresta l'acquisizione delle misure")
         desc.setStyleSheet("color: #64748b; font-size: 12px; font-weight: normal; margin-bottom: 10px;")
         layout.addWidget(desc)
         
@@ -277,50 +284,12 @@ class CableMeasurementApp(QMainWindow):
         button_layout.addStretch()
         layout.addLayout(button_layout)
         
-        # Slider finestra temporale
-        slider_layout = QVBoxLayout()
-        slider_layout.setSpacing(5)
-        
-        slider_info = QHBoxLayout()
-        self.time_window_label = QLabel(f"Finestra Temporale: {self.time_window}s")
-        self.time_window_label.setStyleSheet("font-weight: bold; font-size: 12px; color: #0f172a;")
-        slider_info.addWidget(self.time_window_label)
-        
+        # Contatore campioni
         self.samples_label = QLabel("0 campioni")
         self.samples_label.setStyleSheet("color: #64748b; font-size: 12px;")
-        slider_info.addStretch()
-        slider_info.addWidget(self.samples_label)
-        
-        slider_layout.addLayout(slider_info)
-        
-        self.time_slider = QSlider(Qt.Orientation.Horizontal)
-        self.time_slider.setMinimum(1)
-        self.time_slider.setMaximum(10)
-        self.time_slider.setValue(self.time_window)
-        self.time_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.time_slider.setTickInterval(1)
-        self.time_slider.valueChanged.connect(self.on_time_window_changed)
-        self.time_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                height: 8px;
-                background: #e2e8f0;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #3b82f6;
-                border: none;
-                width: 18px;
-                height: 18px;
-                border-radius: 9px;
-                margin: -5px 0;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #2563eb;
-            }
-        """)
-        
-        slider_layout.addWidget(self.time_slider)
-        layout.addLayout(slider_layout)
+        button_layout.addWidget(self.samples_label)
+        # (lo aggiungiamo anche nel layout principale per visibilità)
+        layout.addStretch()
         
         group.setLayout(layout)
         return group
@@ -444,6 +413,7 @@ class CableMeasurementApp(QMainWindow):
         
         self.expected_input = QLineEdit()
         self.expected_input.setPlaceholderText("Es: 0.006157")
+        # testo in blu per rendere il valore inserito subito visibile
         self.expected_input.setStyleSheet("""
             QLineEdit {
                 padding: 8px;
@@ -451,6 +421,7 @@ class CableMeasurementApp(QMainWindow):
                 border-radius: 6px;
                 font-size: 13px;
                 background-color: white;
+                color: #3b82f6;
             }
             QLineEdit:focus {
                 border: 2px solid #3b82f6;
@@ -517,7 +488,6 @@ class CableMeasurementApp(QMainWindow):
                 }
             """)
             self.status_label.hide()
-            self.time_slider.setEnabled(True)
         else:
             # Avvia
             self.is_acquiring = True
@@ -542,12 +512,6 @@ class CableMeasurementApp(QMainWindow):
             """)
             self.status_label.setText("⚡ In acquisizione")
             self.status_label.show()
-            self.time_slider.setEnabled(False)
-    
-    def on_time_window_changed(self, value: int):
-        """Gestisce il cambio della finestra temporale"""
-        self.time_window = value
-        self.time_window_label.setText(f"Finestra Temporale: {self.time_window}s")
     
     def acquire_data(self):
         """Simula l'acquisizione di dati"""
@@ -566,13 +530,9 @@ class CableMeasurementApp(QMainWindow):
         measurement = Measurement(timestamp, dx, dy)
         self.measurements.append(measurement)
         
-        # Filtra misure nella finestra temporale
-        cutoff_time = timestamp - self.time_window
-        filtered_measurements = [m for m in self.measurements if m.timestamp > cutoff_time]
-        
-        # Calcola diametro equivalente
-        if len(filtered_measurements) >= 10:
-            recent = list(filtered_measurements)[-10:]
+        # Usa gli ultimi 10 campioni (se disponibili) per stimare il diametro equivalente
+        if len(self.measurements) >= 10:
+            recent = list(self.measurements)[-10:]
             avg_dx = sum(m.dx for m in recent) / len(recent)
             avg_dy = sum(m.dy for m in recent) / len(recent)
             self.equivalent_diameter = self.estimate_equivalent_diameter(avg_dx, avg_dy)
@@ -618,15 +578,10 @@ class CableMeasurementApp(QMainWindow):
         if not self.measurements:
             return
         
-        # Filtra misure nella finestra temporale
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - self.time_window
-        filtered = [m for m in self.measurements if m.timestamp > cutoff_time]
-        
+        # Mostra tutte le misure attualmente presenti nella deque (maxlen gestito dalla deque)
+        filtered = list(self.measurements)
         if not filtered:
             return
-        
-        # Prepara dati per il grafico
         start_time = filtered[0].timestamp
         times = [(m.timestamp - start_time) for m in filtered]
         dx_values = [m.dx for m in filtered]
@@ -744,9 +699,10 @@ class CableMeasurementApp(QMainWindow):
             expected_container = QVBoxLayout()
             expected_label = QLabel("Valore Atteso:")
             expected_label.setStyleSheet("color: #64748b; font-size: 11px;")
-            expected_value = QLabel(f"{expected:.6f} kg/m")
-            expected_value.setStyleSheet("color: #0f172a; font-weight: bold; font-size: 13px;")
             expected_container.addWidget(expected_label)
+            expected_value = QLabel(f"{expected:.6f} kg/m")
+            # testo in blu per evidenziare il valore atteso
+            expected_value.setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 13px;")
             expected_container.addWidget(expected_value)
             values_layout.addLayout(expected_container, 0, 1)
             
