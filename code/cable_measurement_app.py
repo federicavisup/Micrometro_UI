@@ -23,6 +23,20 @@ from PySide6.QtGui import QFont, QPalette, QColor
 import pyqtgraph as pg
 from pyqtgraph import PlotWidget
 
+# new imports for prediction
+from pathlib import Path
+import tempfile
+import pandas as pd
+import os
+import sys
+
+# rendi importabile la cartella principale (Micrometro_UI) e importa predict.predict.predict_diameter se disponibile
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import predict
+
+
 
 class Measurement:
     """Classe per rappresentare una singola misurazione"""
@@ -138,15 +152,33 @@ class CableMeasurementApp(QMainWindow):
         self.measurements: deque = deque(maxlen=1000)  # Ultime 1000 misure
         self.current_dx = 0.0
         self.current_dy = 0.0
-        self.equivalent_diameter = 0.0
-        self.weight_per_meter = 0.0
+        # Non abbiamo ancora predizioni: usa None e visualizza "N/D" fino alla prima predizione
+        self.equivalent_diameter = None  # mm or None
+        self.weight_per_meter = None     # kg/m or None
         self.show_metrics = False
-        
+
+        # Predizione periodica: default 5s
+        self.prediction_interval = 5  # seconds
+        self.prediction_timer = QTimer()
+        self.prediction_timer.timeout.connect(self.run_prediction)
+        # temp folder to store csvs (optional)
+        self._prediction_temp_dir = PROJECT_ROOT / 'code' / 'data' / 'temp'
+        try:
+            os.makedirs(self._prediction_temp_dir, exist_ok=True)
+        except Exception:
+            pass
+        # end prediction setup
+
+        # Analisi: finestra temporale (secondi) usata per preparare i dati per la predizione
+        self.analysis_window_seconds = 5  # default (s)
+
         # Timer per l'acquisizione dati
         self.acquisition_timer = QTimer()
         self.acquisition_timer.timeout.connect(self.acquire_data)
         
         self.init_ui()
+        # Forza visualizzazione iniziale (mostra N/D se non ci sono predizioni)
+        self.update_ui()
         
     def init_ui(self):
         """Inizializza l'interfaccia utente"""
@@ -270,9 +302,10 @@ class CableMeasurementApp(QMainWindow):
         button_layout.addWidget(self.start_stop_btn)
         
         self.status_label = QLabel("")
+        # Testo rosso per lo status (sfondo trasparente)
         self.status_label.setStyleSheet("""
-            background-color: #3b82f6;
-            color: white;
+            background-color: transparent;
+            color: #dc2626;
             border-radius: 6px;
             padding: 8px 15px;
             font-weight: bold;
@@ -284,6 +317,34 @@ class CableMeasurementApp(QMainWindow):
         button_layout.addStretch()
         layout.addLayout(button_layout)
         
+        # Campo input: misura della finestra temporale analizzata (s)
+        window_layout = QHBoxLayout()
+        window_label = QLabel("Misura della finestra temporale analizzata (s):")
+        window_label.setStyleSheet("color: #0f172a; font-size: 12px;")
+        window_layout.addWidget(window_label)
+
+        self.analysis_window_input = QLineEdit()
+        self.analysis_window_input.setFixedWidth(80)
+        self.analysis_window_input.setText(str(self.analysis_window_seconds))
+        self.analysis_window_input.setToolTip("Inserire la finestra in secondi usata per costruire il file delle misure per la predizione")
+        self.analysis_window_input.setStyleSheet("""
+            QLineEdit {
+                padding: 6px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                font-size: 12px;
+                background-color: white;
+                color: #0f172a;
+            }
+            QLineEdit:focus {
+                border: 2px solid #3b82f6;
+                color: #0f172a;
+            }
+        """)
+        window_layout.addWidget(self.analysis_window_input)
+        window_layout.addStretch()
+        layout.addLayout(window_layout)
+
         # Contatore campioni
         self.samples_label = QLabel("0 campioni")
         self.samples_label.setStyleSheet("color: #64748b; font-size: 12px;")
@@ -472,6 +533,9 @@ class CableMeasurementApp(QMainWindow):
             # Ferma
             self.is_acquiring = False
             self.acquisition_timer.stop()
+            # stop prediction timer if active
+            if hasattr(self, 'prediction_timer') and self.prediction_timer.isActive():
+                self.prediction_timer.stop()
             self.start_stop_btn.setText("▶ Avvia Acquisizione")
             self.start_stop_btn.setStyleSheet("""
                 QPushButton {
@@ -495,6 +559,17 @@ class CableMeasurementApp(QMainWindow):
             self.show_metrics = False
             self.metrics_container.hide()
             self.acquisition_timer.start(100)  # 10 Hz
+            # start prediction timer if predictor available
+            if predict.predict_diameter is None:
+                # show warning but continue acquisition
+                self.status_label.setText("⚠ predizione non disponibile")
+                self.status_label.show()
+            else:
+                try:
+                    self.prediction_timer.start(int(self.prediction_interval * 1000))
+                except Exception:
+                    pass
+            # end start prediction
             self.start_stop_btn.setText("⏹ Arresta Acquisizione")
             self.start_stop_btn.setStyleSheet("""
                 QPushButton {
@@ -510,8 +585,8 @@ class CableMeasurementApp(QMainWindow):
                     background-color: #b91c1c;
                 }
             """)
-            self.status_label.setText("⚡ In acquisizione")
-            self.status_label.show()
+            #self.status_label.setText("⚡ In acquisizione")
+            #self.status_label.show()
     
     def acquire_data(self):
         """Simula l'acquisizione di dati"""
@@ -530,189 +605,219 @@ class CableMeasurementApp(QMainWindow):
         measurement = Measurement(timestamp, dx, dy)
         self.measurements.append(measurement)
         
-        # Usa gli ultimi 10 campioni (se disponibili) per stimare il diametro equivalente
-        if len(self.measurements) >= 10:
-            recent = list(self.measurements)[-10:]
-            avg_dx = sum(m.dx for m in recent) / len(recent)
-            avg_dy = sum(m.dy for m in recent) / len(recent)
-            self.equivalent_diameter = self.estimate_equivalent_diameter(avg_dx, avg_dy)
+        # NOTA: non eseguiamo più una stima fittizia locale del diametro.
+        # La variabile self.equivalent_diameter verrà aggiornata solamente
+        # quando run_prediction() esegue la predizione reale (ogni prediction_interval secondi).
+        # Quindi qui manteniamo solo la simulazione dei sensori (Dx/Dy).
+        # Aggiorniamo il peso solo se abbiamo già una predizione valida.
+        if self.equivalent_diameter is not None:
+            self.weight_per_meter = self.calculate_weight_per_meter(self.equivalent_diameter)
         else:
-            self.equivalent_diameter = self.estimate_equivalent_diameter(dx, dy)
-        
-        self.weight_per_meter = self.calculate_weight_per_meter(self.equivalent_diameter)
-        
-        # Aggiorna UI
+            self.weight_per_meter = None
+         
+         # Aggiorna UI
         self.update_ui()
     
-    def estimate_equivalent_diameter(self, dx: float, dy: float) -> float:
-        """Stima il diametro equivalente con correzione ML"""
-        geometric_mean = math.sqrt(dx * dy)
-        ml_correction = 1.02 + (random.random() - 0.5) * 0.01
-        return geometric_mean * ml_correction
-    
-    def calculate_weight_per_meter(self, diameter: float) -> float:
-        """Calcola il peso per metro di un cavo in acciaio"""
-        radius_m = (diameter / 2) / 1000  # da mm a m
-        area_m2 = math.pi * (radius_m ** 2)
-        density_steel = 7850  # kg/m³
-        return area_m2 * density_steel
-    
+    # ...removed fake ML estimator...
+    # La stima ML ora viene eseguita solo dalla funzione run_prediction()
+    # che chiama il modulo di predizione reale in code/predict.py.
+
+    def run_prediction(self):
+        """Esegue predizione periodica: crea CSV temporaneo da misure recenti e chiama predict.predict.predict_diameter"""
+        if predict.predict_diameter is None:
+            return
+        try:
+            # determina la finestra temporale da input (in secondi)
+            try:
+                secs = float(self.analysis_window_input.text())
+                if secs <= 0:
+                    secs = self.analysis_window_seconds
+            except Exception:
+                secs = self.analysis_window_seconds
+            # seleziona le misure più recenti entro la finestra secs
+            now_ts = datetime.now().timestamp()
+            cutoff = now_ts - secs
+            samples = [m for m in self.measurements if m.timestamp >= cutoff]
+            # fallback: se non ci sono misure nella finestra, usa gli ultimi 200 come riserva
+            if len(samples) == 0:
+                samples = list(self.measurements)[-200:]
+            if len(samples) == 0:
+                 self.status_label.setText("⚠ nessuna misura per predizione")
+                 self.status_label.show()
+                 return
+
+            # build dataframe with Tempo,Dx,Dy (Tempo formatted as HH:MM:SS.mmm)
+            tempos = []
+            dxs = []
+            dys = []
+            for m in samples:
+                # formatta il timestamp in ora:min:sec.milliseconds (es. 15:05:24.122)
+                try:
+                    dt = datetime.fromtimestamp(m.timestamp)
+                    tempo_str = dt.strftime("%H:%M:%S.%f")[:-3]  # togliere ultime 3 cifre microsecondi -> millisecondi
+                except Exception:
+                    tempo_str = ""
+                tempos.append(tempo_str)
+                dxs.append(m.dx)
+                dys.append(m.dy)
+
+            df = pd.DataFrame({
+                'Tempo': tempos,
+                'Dx': dxs,
+                'Dy': dys
+            })
+
+            # write to a temporary csv file inside temp dir (or system temp)
+            tmp_f = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', dir=str(self._prediction_temp_dir))
+                tmp_f = tmp.name
+                df.to_csv(tmp_f, index=False)
+                tmp.close()
+            except Exception:
+                # fallback to system temp
+                tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
+                tmp_f = tmp.name
+                df.to_csv(tmp_f, index=False)
+                tmp.close()
+
+            # call predict.predict.predict_diameter with absolute path; model_dir in project code/models
+            try:
+                model_dir = str(PROJECT_ROOT / 'code' / 'models')
+                res = predict.predict_diameter(filename=str(tmp_f), data_folder="", model_dir=model_dir, verbose=False)
+            except Exception as e:
+                # show brief error and cleanup
+                self.status_label.setText("❌ Errore predizione")
+                self.status_label.show()
+                try:
+                    os.unlink(tmp_f)
+                except Exception:
+                    pass
+                return
+
+            # cleanup temp file
+            try:
+                os.unlink(tmp_f)
+            except Exception:
+                pass
+
+            # get estimated diameter and update UI
+            estimated = res.get('estimated_diameter', None)
+            if estimated is not None:
+                # Aggiorniamo il diametro equivalente con il valore restituito dal modello.
+                # Se il tuo modello restituisce unità diverse (es. decimi di mm) modifica qui la conversione.
+                self.equivalent_diameter = float(estimated)/10
+                self.weight_per_meter = self.calculate_weight_per_meter(self.equivalent_diameter)
+                # update status and UI
+                self.status_label.setText(f"✓ Pred: {self.equivalent_diameter:.3f} mm (win={secs:.1f}s)")
+                self.status_label.show()
+                self.update_ui()
+        except Exception:
+            # do not stop timer on unexpected errors
+            self.status_label.setText("❌ Errore predizione")
+            self.status_label.show()
+            return
+
     def update_ui(self):
         """Aggiorna l'interfaccia con i nuovi valori"""
         # Aggiorna cards
         self.dx_card.set_value(self.current_dx)
         self.dy_card.set_value(self.current_dy)
-        self.equiv_card.set_value(self.equivalent_diameter)
-        
-        # Aggiorna peso
-        self.weight_label.setText(f"{self.weight_per_meter:.6f} kg/m")
+        # Diametro equivalente: mostra N/D se non disponibile
+        if self.equivalent_diameter is None:
+            self.equiv_card.value_label.setText("N/D")
+        else:
+            self.equiv_card.set_value(self.equivalent_diameter)
+
+        # Peso per metro: mostra N/D se non disponibile
+        if self.weight_per_meter is None:
+            self.weight_label.setText("N/D")
+        else:
+            self.weight_label.setText(f"{self.weight_per_meter:.6f} kg/m")
         
         # Aggiorna contatore campioni
         self.samples_label.setText(f"{len(self.measurements)} campioni")
         
         # Aggiorna grafico
         self.update_chart()
-    
+
     def update_chart(self):
-        """Aggiorna il grafico con i dati recenti"""
+        """Aggiorna il grafico con i dati presenti in self.measurements"""
+        # Verifiche rapide
+        if not hasattr(self, 'dx_curve') or not hasattr(self, 'dy_curve') or not hasattr(self, 'plot_widget'):
+            return
         if not self.measurements:
+            # svuota le curve se non ci sono dati
+            try:
+                self.dx_curve.setData([], [])
+                self.dy_curve.setData([], [])
+            except Exception:
+                pass
             return
-        
-        # Mostra tutte le misure attualmente presenti nella deque (maxlen gestito dalla deque)
+
+        # Usa tutte le misure nella deque (maxlen gestito dalla deque)
         filtered = list(self.measurements)
-        if not filtered:
-            return
         start_time = filtered[0].timestamp
         times = [(m.timestamp - start_time) for m in filtered]
         dx_values = [m.dx for m in filtered]
         dy_values = [m.dy for m in filtered]
-        
-        # Aggiorna curve
-        self.dx_curve.setData(times, dx_values)
-        self.dy_curve.setData(times, dy_values)
-    
+
+        # Aggiorna le curve
+        try:
+            self.dx_curve.setData(times, dx_values)
+            self.dy_curve.setData(times, dy_values)
+            # Adatta l'asse X ai dati (se ci sono almeno 2 punti)
+            if len(times) >= 2:
+                xmin, xmax = min(times), max(times)
+                # lascia un piccolo padding
+                padding = max(0.1, (xmax - xmin) * 0.02)
+                self.plot_widget.setXRange(xmin - padding, xmax + padding, padding=0)
+        except Exception:
+            # non sollevare errori di plotting in runtime
+            pass
+
+    def calculate_weight_per_meter(self, diameter: float) -> float:
+        """Calcola il peso per metro (kg/m) di un cavo in acciaio dato il diametro in mm."""
+        if diameter is None:
+            return None
+        # converti diametro mm -> raggio in metri
+        radius_m = (diameter/ 2.0) / 1000.0
+        area_m2 = math.pi * (radius_m ** 2)
+        density_steel = 7850.0  # kg/m³
+        return area_m2 * density_steel
+
     def calculate_metrics(self):
         """Calcola e visualizza le metriche di confronto"""
         try:
             expected = float(self.expected_input.text())
-            if expected <= 0 or self.weight_per_meter <= 0:
-                return
+            # Non procedere se valore atteso non valido o se non abbiamo ancora un peso calcolato
+            if expected <= 0 or (self.weight_per_meter is None) or (self.weight_per_meter <= 0):
+                 return
+
+            # Calcolo percentuale di scostamento
+            deviation = ((self.weight_per_meter - expected) / expected) * 100
             
-            # Rimuovi widget precedenti
-            while self.metrics_layout.count():
-                child = self.metrics_layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
+            # Punti di riferimento per il semaforo
+            green_threshold = 10  # sotto il 10% di scostamento
+            yellow_threshold = 25  # tra 10% e 25% di scostamento
             
-            # Calcola metriche
-            error = self.weight_per_meter - expected
-            percentage_error = (error / expected) * 100
-            absolute_error = abs(error)
-            relative_error = abs(percentage_error)
-            bias = error
-            accuracy = 100 - relative_error
-            rmse = absolute_error
-            mae = absolute_error
+            # Colori semaforo
+            if abs(deviation) < green_threshold:
+                color = "#15803d"  # verde
+                status = "OK"
+            elif abs(deviation) < yellow_threshold:
+                color = "#eab308"  # giallo
+                status = "Attenzione"
+            else:
+                color = "#dc2626"  # rosso
+                status = "Errore"
             
-            is_acceptable = relative_error < 5
-            
-            # Contenitore con sfondo
-            container = QWidget()
-            container.setStyleSheet("""
-                background-color: #f8fafc;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                padding: 15px;
-            """)
-            container_layout = QVBoxLayout()
-            
-            # Header
-            header_layout = QHBoxLayout()
-            header_title = QLabel("Metriche di Confronto")
-            header_title.setStyleSheet("font-weight: bold; color: #0f172a; font-size: 13px;")
-            header_layout.addWidget(header_title)
-            
-            status_badge = QLabel("✓ Accettabile" if is_acceptable else "⚠ Fuori tolleranza")
-            status_color = "#22c55e" if is_acceptable else "#dc2626"
-            status_badge.setStyleSheet(f"""
-                background-color: {status_color};
-                color: white;
-                padding: 4px 10px;
-                border-radius: 12px;
-                font-weight: bold;
-                font-size: 11px;
-            """)
-            header_layout.addWidget(status_badge)
-            header_layout.addStretch()
-            
-            container_layout.addLayout(header_layout)
-            
-            # Griglia metriche principali
-            metrics_grid = QGridLayout()
-            metrics_grid.setSpacing(10)
-            
-            bias_card = MetricsCard("Bias", "kg/m", 6)
-            bias_card.set_value(bias)
-            metrics_grid.addWidget(bias_card, 0, 0)
-            
-            error_pct_card = MetricsCard("Errore %", "%", 3)
-            error_pct_card.set_value(percentage_error)
-            metrics_grid.addWidget(error_pct_card, 0, 1)
-            
-            abs_error_card = MetricsCard("Errore Assoluto", "kg/m", 6)
-            abs_error_card.set_value(absolute_error)
-            metrics_grid.addWidget(abs_error_card, 0, 2)
-            
-            accuracy_card = MetricsCard("Accuratezza", "%", 2, highlight=True)
-            accuracy_card.set_value(accuracy)
-            metrics_grid.addWidget(accuracy_card, 0, 3)
-            
-            container_layout.addLayout(metrics_grid)
-            
-            # Griglia metriche secondarie
-            secondary_grid = QGridLayout()
-            secondary_grid.setSpacing(10)
-            
-            rmse_card = MetricsCard("RMSE", "kg/m", 6)
-            rmse_card.set_value(rmse)
-            secondary_grid.addWidget(rmse_card, 0, 0)
-            
-            mae_card = MetricsCard("MAE", "kg/m", 6)
-            mae_card.set_value(mae)
-            secondary_grid.addWidget(mae_card, 0, 1)
-            
-            container_layout.addLayout(secondary_grid)
-            
-            # Valori confronto
-            values_layout = QGridLayout()
-            values_layout.setSpacing(15)
-            
-            measured_container = QVBoxLayout()
-            measured_label = QLabel("Valore Misurato:")
-            measured_label.setStyleSheet("color: #64748b; font-size: 11px;")
-            measured_value = QLabel(f"{self.weight_per_meter:.6f} kg/m")
-            measured_value.setStyleSheet("color: #9333ea; font-weight: bold; font-size: 13px;")
-            measured_container.addWidget(measured_label)
-            measured_container.addWidget(measured_value)
-            values_layout.addLayout(measured_container, 0, 0)
-            
-            expected_container = QVBoxLayout()
-            expected_label = QLabel("Valore Atteso:")
-            expected_label.setStyleSheet("color: #64748b; font-size: 11px;")
-            expected_container.addWidget(expected_label)
-            expected_value = QLabel(f"{expected:.6f} kg/m")
-            # testo in blu per evidenziare il valore atteso
-            expected_value.setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 13px;")
-            expected_container.addWidget(expected_value)
-            values_layout.addLayout(expected_container, 0, 1)
-            
-            container_layout.addLayout(values_layout)
-            
-            container.setLayout(container_layout)
-            self.metrics_layout.addWidget(container)
+            # Mostra risultati
             self.metrics_container.show()
-            
-        except ValueError:
+            self.metrics_layout.itemAt(0).widget().setStyleSheet(f"color: {color}; font-weight: bold;")
+            self.metrics_layout.itemAt(0).widget().setText(f"Scostamento: {deviation:.2f}%")
+            self.metrics_layout.itemAt(1).widget().setText(f"Status: {status}")
+        except Exception:
             pass
 
 
